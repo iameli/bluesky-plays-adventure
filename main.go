@@ -88,6 +88,11 @@ func NewHttpClient() *http.Client {
 }
 
 func MentionsMe(post *bsky.FeedPost) (bool, string) {
+	if post.Reply != nil {
+		if strings.Contains(post.Reply.Parent.Uri, "did:plc:4qqhm4o7ksjvz54ho3tutszn") {
+			return true, post.Text
+		}
+	}
 	for _, f := range post.Facets {
 		for _, feat := range f.Features {
 			if feat.RichtextFacet_Mention == nil {
@@ -238,6 +243,7 @@ func adventure(ctx context.Context, entry chan string, client *xrpc.Client) erro
 	}(stdin)
 
 	for i, pipe := range []io.ReadCloser{stdout, stderr} {
+		first := true
 		go func(i int, pipe io.ReadCloser) {
 			reader := bufio.NewReader(pipe)
 			for {
@@ -247,6 +253,10 @@ func adventure(ctx context.Context, entry chan string, client *xrpc.Client) erro
 				}
 				line = strings.TrimSuffix(line, ">")
 				line = strings.TrimSpace(line)
+				if first {
+					first = false
+					continue
+				}
 				fmt.Printf("Posting %q\n", line)
 				err = post(ctx, line, client)
 				if err != nil {
