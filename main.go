@@ -7,15 +7,21 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
 	comatproto "github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/api/bsky"
+	appbsky "github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/events"
 	"github.com/bluesky-social/indigo/events/schedulers/sequential"
+	lexutil "github.com/bluesky-social/indigo/lex/util"
 	"github.com/bluesky-social/indigo/repo"
+	"github.com/bluesky-social/indigo/util"
+	"github.com/bluesky-social/indigo/xrpc"
 	"github.com/gorilla/websocket"
 	"github.com/ipfs/go-datastore"
 	blockstore "github.com/ipfs/go-ipfs-blockstore"
@@ -23,11 +29,61 @@ import (
 )
 
 func main() {
-	entry := make(chan string)
-	go adventure(entry)
-	err := Firehose(context.TODO(), entry)
+	err := Run(context.TODO())
 	if err != nil {
 		panic(err)
+	}
+}
+
+func Run(ctx context.Context) error {
+	client, err := Client(ctx)
+	if err != nil {
+		return err
+	}
+	entry := make(chan string)
+	go adventure(ctx, entry, client)
+	err = Firehose(ctx, entry)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func Client(ctx context.Context) (*xrpc.Client, error) {
+	anonClient := &xrpc.Client{
+		Client: NewHttpClient(),
+		Host:   "https://iame.li",
+		Auth:   &xrpc.AuthInfo{},
+	}
+	session, err := comatproto.ServerCreateSession(ctx, anonClient, &comatproto.ServerCreateSession_Input{
+		Identifier: "adventure.iame.li",
+		Password:   os.Getenv("ADVENTURE_PASSWORD"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &xrpc.Client{
+		Client: NewHttpClient(),
+		Host:   "https://iame.li",
+		Auth: &xrpc.AuthInfo{
+			AccessJwt:  session.AccessJwt,
+			RefreshJwt: session.RefreshJwt,
+			Did:        session.Did,
+			Handle:     session.Handle,
+		},
+	}, nil
+}
+
+func NewHttpClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
 	}
 }
 
@@ -156,7 +212,7 @@ func unpackRecords(blks []byte, ops []*atproto.SyncSubscribeRepos_RepoOp) ([]any
 	return out, nil
 }
 
-func adventure(entry chan string) error {
+func adventure(ctx context.Context, entry chan string, client *xrpc.Client) error {
 	cmd := exec.Command("./adv550")
 
 	stdin, err := cmd.StdinPipe()
@@ -185,8 +241,17 @@ func adventure(entry chan string) error {
 		go func(i int, pipe io.ReadCloser) {
 			reader := bufio.NewReader(pipe)
 			for {
-				line, _, _ := reader.ReadLine()
-				fmt.Printf("%s\n", line)
+				line, err := reader.ReadString([]byte(">")[0])
+				if err != nil {
+					panic(err)
+				}
+				line = strings.TrimSuffix(line, ">")
+				line = strings.TrimSpace(line)
+				fmt.Printf("Posting %q\n", line)
+				err = post(ctx, line, client)
+				if err != nil {
+					fmt.Printf("error posting: %s\n", err)
+				}
 			}
 		}(i, pipe)
 	}
@@ -199,4 +264,16 @@ func adventure(entry chan string) error {
 		return err
 	}
 	return nil
+}
+
+func post(ctx context.Context, text string, client *xrpc.Client) error {
+	_, err := comatproto.RepoCreateRecord(ctx, client, &comatproto.RepoCreateRecord_Input{
+		Collection: "app.bsky.feed.post",
+		Repo:       "did:plc:4qqhm4o7ksjvz54ho3tutszn",
+		Record: &lexutil.LexiconTypeDecoder{Val: &appbsky.FeedPost{
+			Text:      text,
+			CreatedAt: time.Now().Format(util.ISO8601),
+		}},
+	})
+	return err
 }
