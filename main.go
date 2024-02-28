@@ -28,6 +28,19 @@ import (
 	"github.com/ipld/go-car"
 )
 
+type EmbedPost struct {
+	CID    string
+	Author string
+	Path   string
+}
+
+func (p *EmbedPost) URI() string {
+	// "uri": "at://did:plc:2zmxikig2sj7gqaezl5gntae/app.bsky.feed.post/3kmciya5y7k2l"
+	return fmt.Sprintf("at://%s/%s", p.Author, p.Path)
+}
+
+var lastPost *EmbedPost
+
 func main() {
 	err := Run(context.TODO())
 	if err != nil {
@@ -111,12 +124,17 @@ func MentionsMe(post *bsky.FeedPost) (bool, string) {
 	return false, ""
 }
 
-func HandlePost(post *bsky.FeedPost, entry chan string) error {
+func HandlePost(post *bsky.FeedPost, entry chan string, path, cid, author string) error {
 	mentions, text := MentionsMe(post)
 	if !mentions {
 		return nil
 	}
 	text = strings.Trim(text, " ")
+	lastPost = &EmbedPost{
+		CID:    cid,
+		Author: author,
+		Path:   path,
+	}
 	fmt.Printf("got command: %s\n", text)
 	entry <- fmt.Sprintf("%s\n", text)
 	return nil
@@ -147,7 +165,7 @@ func Firehose(ctx context.Context, entry chan string) error {
 			for _, rec := range recs {
 				switch rec := rec.(type) {
 				case *bsky.FeedPost:
-					HandlePost(rec, entry)
+					HandlePost(rec, entry, evt.Ops[0].Path, evt.Commit.String(), evt.Repo)
 				}
 			}
 			return nil
@@ -277,13 +295,28 @@ func adventure(ctx context.Context, entry chan string, client *xrpc.Client) erro
 }
 
 func post(ctx context.Context, text string, client *xrpc.Client) error {
+	newpost := &appbsky.FeedPost{
+		Text:      text,
+		CreatedAt: time.Now().Format(util.ISO8601),
+	}
+	if lastPost != nil {
+		newpost.Embed = &appbsky.FeedPost_Embed{
+			EmbedRecord: &appbsky.EmbedRecord{
+				LexiconTypeID: "app.bsky.embed.record",
+				Record: &comatproto.RepoStrongRef{
+					LexiconTypeID: "com.atproto.repo.strongRef",
+					Cid:           lastPost.CID,
+					Uri:           lastPost.URI(),
+				},
+			},
+		}
+	}
 	_, err := comatproto.RepoCreateRecord(ctx, client, &comatproto.RepoCreateRecord_Input{
 		Collection: "app.bsky.feed.post",
 		Repo:       "did:plc:4qqhm4o7ksjvz54ho3tutszn",
-		Record: &lexutil.LexiconTypeDecoder{Val: &appbsky.FeedPost{
-			Text:      text,
-			CreatedAt: time.Now().Format(util.ISO8601),
-		}},
+		Record: &lexutil.LexiconTypeDecoder{
+			Val: newpost,
+		},
 	})
 	return err
 }
