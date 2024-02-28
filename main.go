@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"os/exec"
 	"strings"
 
@@ -25,42 +24,44 @@ import (
 
 func main() {
 	entry := make(chan string)
-	reader := bufio.NewReader(os.Stdin)
-	go func() {
-		fmt.Print("Enter text: ")
-		text, _ := reader.ReadString('\n')
-		entry <- text
-	}()
 	go adventure(entry)
-	err := Firehose(context.TODO())
+	err := Firehose(context.TODO(), entry)
 	if err != nil {
 		panic(err)
 	}
 }
 
-func MentionsMe(post *bsky.FeedPost) bool {
+func MentionsMe(post *bsky.FeedPost) (bool, string) {
 	for _, f := range post.Facets {
 		for _, feat := range f.Features {
 			if feat.RichtextFacet_Mention == nil {
 				continue
 			}
 			if feat.RichtextFacet_Mention.Did == "did:plc:4qqhm4o7ksjvz54ho3tutszn" {
-				return true
+				bs := []byte(post.Text)
+				before := bs[0:f.Index.ByteStart]
+				after := bs[f.Index.ByteEnd:]
+				removed := append([]byte{}, before...)
+				removed = append(removed, after...)
+				return true, string(removed)
 			}
 		}
 	}
-	return false
+	return false, ""
 }
 
-func HandlePost(post *bsky.FeedPost) error {
-	if !MentionsMe(post) {
+func HandlePost(post *bsky.FeedPost, entry chan string) error {
+	mentions, text := MentionsMe(post)
+	if !mentions {
 		return nil
 	}
-	fmt.Printf("\tPost: %q\n", strings.Replace(post.Text, "\n", " ", -1))
+	text = strings.Trim(text, " ")
+	fmt.Printf("got command: %s\n", text)
+	entry <- fmt.Sprintf("%s\n", text)
 	return nil
 }
 
-func Firehose(ctx context.Context) error {
+func Firehose(ctx context.Context, entry chan string) error {
 	d := websocket.DefaultDialer
 	con, _, err := d.Dial("wss://bsky.network/xrpc/com.atproto.sync.subscribeRepos", http.Header{})
 	if err != nil {
@@ -85,7 +86,7 @@ func Firehose(ctx context.Context) error {
 			for _, rec := range recs {
 				switch rec := rec.(type) {
 				case *bsky.FeedPost:
-					HandlePost(rec)
+					HandlePost(rec, entry)
 				}
 			}
 			return nil
