@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/bluesky-social/indigo/api/atproto"
@@ -21,6 +24,14 @@ import (
 )
 
 func main() {
+	entry := make(chan string)
+	reader := bufio.NewReader(os.Stdin)
+	go func() {
+		fmt.Print("Enter text: ")
+		text, _ := reader.ReadString('\n')
+		entry <- text
+	}()
+	go adventure(entry)
 	err := Firehose(context.TODO())
 	if err != nil {
 		panic(err)
@@ -142,4 +153,49 @@ func unpackRecords(blks []byte, ops []*atproto.SyncSubscribeRepos_RepoOp) ([]any
 	}
 
 	return out, nil
+}
+
+func adventure(entry chan string) error {
+	cmd := exec.Command("./adv550")
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+
+	go func(pipe io.WriteCloser) {
+		for {
+			line := <-entry
+			pipe.Write([]byte(line))
+		}
+	}(stdin)
+
+	for i, pipe := range []io.ReadCloser{stdout, stderr} {
+		go func(i int, pipe io.ReadCloser) {
+			reader := bufio.NewReader(pipe)
+			for {
+				line, _, _ := reader.ReadLine()
+				fmt.Printf("%s\n", line)
+			}
+		}(i, pipe)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	if err := cmd.Wait(); err != nil {
+		return err
+	}
+	return nil
 }
