@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	_ "embed"
 
@@ -19,6 +21,10 @@ import (
 
 //go:embed adv550.wasm
 var adv550 []byte
+
+var saveState experimental.Snapshot
+var saveMem *[]byte
+var savedIovs, savedIovsCount, savedResultNread int32
 
 func StartAdventWASM(ctx context.Context) error {
 	ctx = context.WithValue(ctx, experimental.EnableSnapshotterKey{}, struct{}{})
@@ -57,16 +63,44 @@ func StartAdventWASM(ctx context.Context) error {
 
 	builder := r.NewHostModuleBuilder("wasi_snapshot_preview1")
 	wasi_snapshot_preview1.NewFunctionExporter().ExportFunctions(builder)
+	var start time.Time
 
 	builder.NewFunctionBuilder().
-		WithFunc(func(ctx context.Context, mod api.Module, a, b, c, d int32) int32 {
-			fmt.Printf("%d %d %d %d\n", a, b, c, d)
-			// snapshotter := ctx.Value(experimental.SnapshotterKey{}).(experimental.Snapshotter)
-			// _ = snapshotter.Snapshot()
+		WithFunc(func(ctx context.Context, mod api.Module, fd, iovs, iovsCount, resultNread int32) int32 {
+			// fmt.Printf("%d %d %d %d\n", a, b, c, d)
+			mem := mod.Memory()
+			ret := int32(fdRead(mod, []int32{fd, iovs, iovsCount, resultNread}))
+			if saveState == nil {
+				bs, ok := mem.Read(0, mem.Size())
+				if !ok {
+					panic("not ok")
+				}
+				newBuf := make([]byte, len(bs))
+				copy(newBuf, bs)
+				saveMem = &newBuf
+				snapshotter := ctx.Value(experimental.SnapshotterKey{}).(experimental.Snapshotter)
+				saveState = snapshotter.Snapshot()
+				start = time.Now()
+				savedIovs = iovs
+				savedIovsCount = iovsCount
+				savedResultNread = resultNread
+			}
+			if start.Add(5 * time.Second).Before(time.Now()) {
+				fmt.Printf("restoring %d bytes\n", len(*saveMem))
+				start = time.Now().Add(1000 * time.Hour)
+				ok := mem.Write(0, *saveMem)
+				if !ok {
+					panic("not ok")
+				}
+				iovs = savedIovs
+				iovsCount = savedIovsCount
+				resultNread = savedResultNread
+				saveState.Restore([]uint64{uint64(ret)})
+			}
 			// fmt.Println(snapshot)
 			// panic("got here")
 			// return 0
-			return int32(fdRead(mod, []int32{a, b, c, d}))
+			return ret
 		}).Export("fd_read")
 
 	// _, err := r.NewHostModuleBuilder("env").
@@ -105,9 +139,22 @@ func StartAdventWASM(ctx context.Context) error {
 }
 
 var le = binary.LittleEndian
+var start *bufio.Reader
 var sr *bufio.Reader
 
 func stdinReader(buf []byte) (n int, errno experimentalsys.Errno) {
+	if start == nil {
+		start = bufio.NewReader(strings.NewReader("no\n"))
+	}
+	_, err := start.Peek(1)
+	if err == nil {
+		b, err := start.ReadByte()
+		if err != nil {
+			panic(err)
+		}
+		buf[0] = b
+		return 1, 0
+	}
 	if sr == nil {
 		sr = bufio.NewReader(os.Stdin)
 	}
