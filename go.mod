@@ -5,6 +5,10 @@ go 1.21.6
 require (
 	github.com/bluesky-social/indigo v0.0.0-20240228193119-0f7714848b28
 	github.com/gorilla/websocket v1.5.1
+	github.com/ipfs/go-datastore v0.6.0
+	github.com/ipfs/go-ipfs-blockstore v1.3.1
+	github.com/ipld/go-car v0.6.1-0.20230509095817-92d28eb23ba4
+	github.com/tetratelabs/wazero v1.6.1-0.20240304062853-027e68b5c302
 )
 
 require (
@@ -26,8 +30,6 @@ require (
 	github.com/ipfs/go-block-format v0.2.0 // indirect
 	github.com/ipfs/go-blockservice v0.5.2 // indirect
 	github.com/ipfs/go-cid v0.4.1 // indirect
-	github.com/ipfs/go-datastore v0.6.0 // indirect
-	github.com/ipfs/go-ipfs-blockstore v1.3.1 // indirect
 	github.com/ipfs/go-ipfs-ds-help v1.1.1 // indirect
 	github.com/ipfs/go-ipfs-exchange-interface v0.2.1 // indirect
 	github.com/ipfs/go-ipfs-util v0.0.3 // indirect
@@ -40,7 +42,6 @@ require (
 	github.com/ipfs/go-merkledag v0.11.0 // indirect
 	github.com/ipfs/go-metrics-interface v0.0.1 // indirect
 	github.com/ipfs/go-verifcid v0.0.3 // indirect
-	github.com/ipld/go-car v0.6.1-0.20230509095817-92d28eb23ba4 // indirect
 	github.com/ipld/go-car/v2 v2.13.1 // indirect
 	github.com/ipld/go-codec-dagpb v1.6.0 // indirect
 	github.com/ipld/go-ipld-prime v0.21.0 // indirect

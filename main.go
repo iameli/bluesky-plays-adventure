@@ -42,10 +42,12 @@ func (p *EmbedPost) URI() string {
 var lastPost *EmbedPost
 
 func main() {
-	err := Run(context.TODO())
+	// err := Run(context.TODO())
+	err := StartAdventWASM(context.TODO())
 	if err != nil {
 		panic(err)
 	}
+	fmt.Println("returned")
 }
 
 func Run(ctx context.Context) error {
