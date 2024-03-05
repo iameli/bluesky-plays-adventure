@@ -53,6 +53,16 @@ func main() {
 			fmt.Println(str)
 		}
 	}()
+	go func() {
+		stdin := bufio.NewReader(os.Stdin)
+		for {
+			line, err := stdin.ReadString([]byte("\n")[0])
+			if err != nil {
+				panic(err)
+			}
+			a.StdinWriter.Write([]byte(line))
+		}
+	}()
 	err = a.Start(context.TODO())
 	if err != nil {
 		panic(err)
