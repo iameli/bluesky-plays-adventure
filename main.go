@@ -43,7 +43,17 @@ var lastPost *EmbedPost
 
 func main() {
 	// err := Run(context.TODO())
-	err := StartAdventWASM(context.TODO())
+	a, err := NewAdvent()
+	if err != nil {
+		panic(err)
+	}
+	go func() {
+		for {
+			str := <-a.Output
+			fmt.Println(str)
+		}
+	}()
+	err = a.Start(context.TODO())
 	if err != nil {
 		panic(err)
 	}

@@ -4,10 +4,12 @@ go 1.21.6
 
 require (
 	github.com/bluesky-social/indigo v0.0.0-20240228193119-0f7714848b28
+	github.com/fxamacker/cbor v1.5.1
 	github.com/gorilla/websocket v1.5.1
 	github.com/ipfs/go-datastore v0.6.0
 	github.com/ipfs/go-ipfs-blockstore v1.3.1
 	github.com/ipld/go-car v0.6.1-0.20230509095817-92d28eb23ba4
+	github.com/ipld/go-ipld-prime v0.21.0
 	github.com/tetratelabs/wazero v1.6.1-0.20240304062853-027e68b5c302
 )
 
@@ -44,7 +46,6 @@ require (
 	github.com/ipfs/go-verifcid v0.0.3 // indirect
 	github.com/ipld/go-car/v2 v2.13.1 // indirect
 	github.com/ipld/go-codec-dagpb v1.6.0 // indirect
-	github.com/ipld/go-ipld-prime v0.21.0 // indirect
 	github.com/jbenet/goprocess v0.1.4 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
@@ -69,6 +70,7 @@ require (
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/whyrusleeping/cbor v0.0.0-20171005072247-63513f603b11 // indirect
 	github.com/whyrusleeping/cbor-gen v0.0.0-20240201211319-bf2168ca937c // indirect
+	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.46.1 // indirect
 	go.opentelemetry.io/otel v1.21.0 // indirect
 	go.opentelemetry.io/otel/metric v1.21.0 // indirect

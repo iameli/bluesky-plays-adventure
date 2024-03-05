@@ -5,112 +5,113 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"strings"
-	"time"
 
 	_ "embed"
 
+	"github.com/fxamacker/cbor"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/experimental"
 	experimentalsys "github.com/tetratelabs/wazero/experimental/sys"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
-	_ "github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 )
 
 //go:embed adv550.wasm
 var adv550 []byte
 
-var saveState experimental.Snapshot
-var saveMem *[]byte
-var savedIovs, savedIovsCount, savedResultNread int32
+// All data necessary for a save state
+type SaveGame struct {
+	Memory     []byte `cbor:"memory"`
+	StdinAddr  int64  `cbor:"stdinaddr"`
+	StdinCount int64  `cbor:"stdincount"`
+	ResultAddr int64  `cbor:"resultaddr"`
+}
 
-func StartAdventWASM(ctx context.Context) error {
-	ctx = context.WithValue(ctx, experimental.EnableSnapshotterKey{}, struct{}{})
+func (s *SaveGame) SaveFile(path string) error {
+	raw, err := cbor.Marshal(s, cbor.EncOptions{})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, raw, 0644)
+}
+
+type Advent struct {
+	Input  chan string
+	Output chan string
+
+	StdinReader io.Reader
+	StdinWriter io.Writer
+
+	StdoutBuffer []byte
+}
+
+type AdventWriter struct{}
+
+func NewAdvent() (*Advent, error) {
+	reader, writer := io.Pipe()
+	a := Advent{
+		Input:        make(chan string),
+		Output:       make(chan string),
+		StdinReader:  reader,
+		StdinWriter:  writer,
+		StdoutBuffer: []byte{},
+	}
+	return &a, nil
+}
+
+// implementing io.Writer is a simple way to get stdout written to us
+func (a *Advent) Write(p []byte) (int, error) {
+	a.StdoutBuffer = append(a.StdoutBuffer, p...)
+	return len(p), nil
+}
+
+// custom read(2) implementation where we inject most of our magic - called when the app wants stdin
+func (a *Advent) CRead(ctx context.Context, mod api.Module, fd, iovs, iovsCount, resultNread int32) int32 {
+	// stdin requested so dump the stdout buffer if present
+	if len(a.StdoutBuffer) > 0 {
+		a.Output <- string(a.StdoutBuffer)
+		a.StdoutBuffer = []byte{}
+
+		// next do a savestate so we can come back here later
+		mem := mod.Memory()
+		bs, ok := mem.Read(0, mem.Size())
+		if !ok {
+			panic("not ok reading wasm memory")
+		}
+		state := &SaveGame{
+			Memory:     bs,
+			StdinAddr:  int64(iovs),
+			StdinCount: int64(iovsCount),
+			ResultAddr: int64(resultNread),
+		}
+		err := state.SaveFile("save.cbor")
+		if err != nil {
+			panic(fmt.Errorf("error saving file: %s", err))
+		}
+	}
+
+	ret := int32(fdRead(mod, []int32{fd, iovs, iovsCount, resultNread}))
+	return ret
+}
+
+func (a *Advent) Start(ctx context.Context) error {
 	// Create a new WebAssembly Runtime.
 	r := wazero.NewRuntime(ctx)
+	defer r.Close(ctx)
 
-	config := wazero.NewModuleConfig().WithStdin(os.Stdin).WithStdout(os.Stdout).WithStderr(os.Stderr)
-
-	// var fdRead = newHostFunc(
-	// 	wasip1.FdReadName, fdReadFn,
-	// 	[]api.ValueType{i32, i32, i32, i32},
-	// 	"fd", "iovs", "iovs_len", "result.nread",
-	// )
-
-	// read := func(_ context.Context, mod api.Module, params []uint64) uint16 {
-	// 	return 0
-	// }
-	// wazero.HostFunctionBuilder
-
-	// fdRead := &api.HostFunc{
-	// 	ExportName:  "fd_read",
-	// 	Name:        "fd_read",
-	// 	ParamTypes:  []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
-	// 	ParamNames:  []string{"fd", "iovs", "iovs_len", "result.nread"},
-	// 	ResultTypes: []api.ValueType{api.ValueTypeI32},
-	// 	ResultNames: []string{"errno"},
-	// 	Code:        api.Code{GoFunc: read},
-	// }
-
-	// x := &api.
-
-	defer r.Close(ctx) // This closes everything this Runtime created.
-
-	// Instantiate WASI, which implements host functions needed for TinyGo to
-	// implement `panic`.
+	config := wazero.NewModuleConfig().WithStdin(a.StdinReader).WithStdout(a).WithStderr(a)
 
 	builder := r.NewHostModuleBuilder("wasi_snapshot_preview1")
 	wasi_snapshot_preview1.NewFunctionExporter().ExportFunctions(builder)
-	var start time.Time
 
-	builder.NewFunctionBuilder().
-		WithFunc(func(ctx context.Context, mod api.Module, fd, iovs, iovsCount, resultNread int32) int32 {
-			// fmt.Printf("%d %d %d %d\n", a, b, c, d)
-			mem := mod.Memory()
-			ret := int32(fdRead(mod, []int32{fd, iovs, iovsCount, resultNread}))
-			if saveState == nil {
-				bs, ok := mem.Read(0, mem.Size())
-				if !ok {
-					panic("not ok")
-				}
-				newBuf := make([]byte, len(bs))
-				copy(newBuf, bs)
-				saveMem = &newBuf
-				snapshotter := ctx.Value(experimental.SnapshotterKey{}).(experimental.Snapshotter)
-				saveState = snapshotter.Snapshot()
-				start = time.Now()
-				savedIovs = iovs
-				savedIovsCount = iovsCount
-				savedResultNread = resultNread
-			}
-			if start.Add(5 * time.Second).Before(time.Now()) {
-				fmt.Printf("restoring %d bytes\n", len(*saveMem))
-				start = time.Now().Add(1000 * time.Hour)
-				ok := mem.Write(0, *saveMem)
-				if !ok {
-					panic("not ok")
-				}
-				iovs = savedIovs
-				iovsCount = savedIovsCount
-				resultNread = savedResultNread
-				saveState.Restore([]uint64{uint64(ret)})
-			}
-			// fmt.Println(snapshot)
-			// panic("got here")
-			// return 0
-			return ret
-		}).Export("fd_read")
+	// answer "no" to "do you want instructions" so we can go immediately to the right code path
+	go func() {
+		a.StdinWriter.Write([]byte("no\n"))
+	}()
 
-	// _, err := r.NewHostModuleBuilder("env").
-	// 	NewFunctionBuilder().
-	// 	WithFunc().
-	// 	Export("fd_read").
-	// 	Instantiate(ctx)
-	// if err != nil {
-	// 	return fmt.Errorf("failed to instantiate module: %v", err)
-	// }
+	builder.NewFunctionBuilder().WithFunc(a.CRead).Export("fd_read")
 
 	builder.Instantiate(ctx)
 	// Instantiate the guest Wasm into the same runtime. It exports the `add`
@@ -121,21 +122,6 @@ func StartAdventWASM(ctx context.Context) error {
 	}
 
 	return nil
-
-	// // Read two args to add.
-	// x, y, err := readTwoArgs(flag.Arg(0), flag.Arg(1))
-	// if err != nil {
-	// 	log.Panicf("failed to read arguments: %v", err)
-	// }
-
-	// // Call the `add` function and print the results to the console.
-	// add := mod.ExportedFunction("add")
-	// results, err := add.Call(ctx, x, y)
-	// if err != nil {
-	// 	log.Panicf("failed to call add: %v", err)
-	// }
-
-	// fmt.Printf("%d + %d = %d\n", x, y, results[0])
 }
 
 var le = binary.LittleEndian
